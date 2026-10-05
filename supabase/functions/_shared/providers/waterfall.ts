@@ -5,6 +5,7 @@
   ProviderResult,
 } from "./types.ts";
 import { ProviderRegistry } from "./registry.ts";
+import { companyEntityKey } from "../normalization/company.ts";
 
 export interface WaterfallPolicy {
   minResults: number;
@@ -13,24 +14,38 @@ export interface WaterfallPolicy {
   minConfidence?: number;
 }
 
+export interface ProviderErrorResult {
+  providerId: string;
+  message: string;
+  retryable: boolean;
+}
+
 export interface WaterfallResult {
   candidates: CompanyCandidate[];
   providersUsed: string[];
+  providerErrors: ProviderErrorResult[];
   totalCost: number;
   totalLatencyMs: number;
   providerResults: ProviderResult[];
 }
 
 export class ProviderWaterfall {
-  constructor(private readonly registry: ProviderRegistry) {}
+  constructor(
+    private readonly registry: ProviderRegistry
+  ) {}
 
   async discover(
     input: DiscoveryInput,
     policy: WaterfallPolicy,
     requestId: string
   ): Promise<WaterfallResult> {
-    const candidates = new Map<string, CompanyCandidate>();
+    const candidates = new Map<
+      string,
+      CompanyCandidate
+    >();
+
     const providersUsed: string[] = [];
+    const providerErrors: ProviderErrorResult[] = [];
     const providerResults: ProviderResult[] = [];
 
     let totalCost = 0;
@@ -41,7 +56,8 @@ export class ProviderWaterfall {
     for (const provider of providers) {
       if (
         policy.maxProviders !== undefined &&
-        providersUsed.length >= policy.maxProviders
+        providersUsed.length >=
+          policy.maxProviders
       ) {
         break;
       }
@@ -53,65 +69,99 @@ export class ProviderWaterfall {
         break;
       }
 
+      const remainingBudget =
+        policy.maxCost !== undefined
+          ? Math.max(
+              policy.maxCost - totalCost,
+              0
+            )
+          : Number.POSITIVE_INFINITY;
+
+      if (remainingBudget <= 0) {
+        break;
+      }
+
       const context: ProviderContext = {
         requestId,
-        remainingBudget:
-          policy.maxCost !== undefined
-            ? Math.max(policy.maxCost - totalCost, 0)
-            : Number.POSITIVE_INFINITY,
+        remainingBudget,
       };
 
       try {
-        const result = await provider.discover(input, context);
+        const result =
+          await provider.discover(
+            input,
+            context
+          );
 
         providersUsed.push(provider.id);
         providerResults.push(result);
 
-        totalCost += result.estimatedCost;
-        totalLatencyMs += result.latencyMs;
+        totalCost +=
+          result.estimatedCost;
+
+        totalLatencyMs +=
+          result.latencyMs;
 
         for (const candidate of result.candidates) {
           if (
-            policy.minConfidence !== undefined &&
-            candidate.confidence < policy.minConfidence
+            policy.minConfidence !==
+              undefined &&
+            candidate.confidence <
+              policy.minConfidence
           ) {
             continue;
           }
 
-          const key = this.entityKey(candidate);
-          const existing = candidates.get(key);
+          const key =
+            companyEntityKey(
+              candidate
+            );
 
-          if (!existing || candidate.confidence > existing.confidence) {
-            candidates.set(key, candidate);
+          const existing =
+            candidates.get(key);
+
+          if (
+            !existing ||
+            candidate.confidence >
+              existing.confidence
+          ) {
+            candidates.set(
+              key,
+              candidate
+            );
           }
         }
 
-        if (candidates.size >= policy.minResults) {
+        if (
+          candidates.size >=
+          policy.minResults
+        ) {
           break;
         }
-      } catch {
-        providersUsed.push(provider.id);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Unknown provider error";
+
+        providerErrors.push({
+          providerId: provider.id,
+          message,
+          retryable: true,
+        });
       }
     }
 
     return {
-      candidates: [...candidates.values()].slice(0, input.limit),
+      candidates: [
+        ...candidates.values(),
+      ].slice(0, input.limit),
+
       providersUsed,
+      providerErrors,
       totalCost,
       totalLatencyMs,
       providerResults,
     };
-  }
-
-  private entityKey(candidate: CompanyCandidate): string {
-    if (candidate.domain) {
-      return candidate.domain
-        .toLowerCase()
-        .replace(/^https?:\/\//, "")
-        .replace(/^www\./, "")
-        .split("/")[0];
-    }
-
-    return candidate.name.trim().toLowerCase();
   }
 }

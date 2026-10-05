@@ -8,7 +8,7 @@
 export class MockDiscoveryProvider implements DiscoveryProvider {
   id = "mock";
   name = "Mock Discovery Provider";
-  priority = 1;
+  priority = 100;
 
   capabilities = new Set([
     "company_discovery",

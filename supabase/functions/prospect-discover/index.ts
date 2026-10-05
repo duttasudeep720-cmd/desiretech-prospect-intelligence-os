@@ -1,75 +1,172 @@
 ﻿import { ProviderRegistry } from "../_shared/providers/registry.ts";
 import { ProviderWaterfall } from "../_shared/providers/waterfall.ts";
-import { MockDiscoveryProvider } from "../_shared/providers/providers/mock.ts";
+import { SerperDiscoveryProvider } from "../_shared/providers/providers/serper.ts";
 
 const registry = new ProviderRegistry();
-registry.register(new MockDiscoveryProvider());
+
+// Production discovery provider.
+registry.register(new SerperDiscoveryProvider());
 
 const waterfall = new ProviderWaterfall(registry);
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+function jsonResponse(
+  body: unknown,
+  status = 200
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      ...corsHeaders,
+    },
+  });
+}
+
 Deno.serve(async (request) => {
+  if (request.method === "OPTIONS") {
+    return new Response("ok", {
+      status: 200,
+      headers: corsHeaders,
+    });
+  }
+
   if (request.method !== "POST") {
-    return new Response(
-      JSON.stringify({ error: "Method not allowed" }),
-      {
-        status: 405,
-        headers: { "Content-Type": "application/json" },
-      }
+    return jsonResponse(
+      { error: "Method not allowed" },
+      405
     );
   }
 
   try {
     const body = await request.json();
 
-    if (!body.query || typeof body.query !== "string") {
-      return new Response(
-        JSON.stringify({ error: "query is required" }),
+    if (!body || typeof body !== "object") {
+      return jsonResponse(
         {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
+          error:
+            "Request body must be a JSON object",
+        },
+        400
       );
     }
 
+    if (
+      typeof body.query !== "string" ||
+      body.query.trim().length === 0
+    ) {
+      return jsonResponse(
+        { error: "query is required" },
+        400
+      );
+    }
+
+    const requestedLimit =
+      typeof body.limit === "number"
+        ? body.limit
+        : 10;
+
     const input = {
-      query: body.query,
-      location: body.location,
-      industry: body.industry,
-      minEmployees: body.minEmployees,
-      maxEmployees: body.maxEmployees,
-      limit: Math.min(Math.max(body.limit ?? 10, 1), 100),
+      query: body.query.trim(),
+
+      location:
+        typeof body.location === "string"
+          ? body.location.trim()
+          : undefined,
+
+      industry:
+        typeof body.industry === "string"
+          ? body.industry.trim()
+          : undefined,
+
+      minEmployees:
+        typeof body.minEmployees === "number"
+          ? body.minEmployees
+          : undefined,
+
+      maxEmployees:
+        typeof body.maxEmployees === "number"
+          ? body.maxEmployees
+          : undefined,
+
+      limit: Math.min(
+        Math.max(requestedLimit, 1),
+        100
+      ),
     };
+
+    if (
+      input.minEmployees !== undefined &&
+      input.minEmployees < 0
+    ) {
+      return jsonResponse(
+        {
+          error:
+            "minEmployees must be greater than or equal to 0",
+        },
+        400
+      );
+    }
+
+    if (
+      input.maxEmployees !== undefined &&
+      input.maxEmployees < 0
+    ) {
+      return jsonResponse(
+        {
+          error:
+            "maxEmployees must be greater than or equal to 0",
+        },
+        400
+      );
+    }
+
+    if (
+      input.minEmployees !== undefined &&
+      input.maxEmployees !== undefined &&
+      input.minEmployees > input.maxEmployees
+    ) {
+      return jsonResponse(
+        {
+          error:
+            "minEmployees cannot be greater than maxEmployees",
+        },
+        400
+      );
+    }
 
     const result = await waterfall.discover(
       input,
       {
         minResults: input.limit,
-        maxProviders: 3,
+        maxProviders: 1,
         maxCost: 1,
         minConfidence: 0.5,
       },
       crypto.randomUUID()
     );
 
-    return new Response(
-      JSON.stringify(result),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-        },
-      }
-    );
+    return jsonResponse(result);
   } catch (error) {
-    return new Response(
-      JSON.stringify({
-        error: error instanceof Error ? error.message : "Unknown error",
-      }),
+    console.error(
+      "prospect-discover error:",
+      error
+    );
+
+    return jsonResponse(
       {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown error",
+      },
+      500
     );
   }
 });
