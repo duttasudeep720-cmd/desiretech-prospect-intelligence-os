@@ -76,7 +76,6 @@ const NON_COMPANY_PATTERNS = [
   /\bjob\s+board\b/i,
   /\bcompanies?\s+to\s+work\s+for\b/i,
 
-  // Agencies / service businesses.
   /\bdevelopment\s+company\b/i,
   /\bsoftware\s+development\b/i,
   /\bweb\s+development\b/i,
@@ -220,7 +219,6 @@ function isLikelyCompanyPage(
 
   try {
     const url = new URL(result.link);
-
     const path =
       url.pathname.toLowerCase();
 
@@ -235,7 +233,7 @@ function isLikelyCompanyPage(
     return false;
   }
 
-  // Discovery should primarily return company homepages.
+  // Only accept root/company homepages as candidates.
   if (!isHomepage(result.link)) {
     return false;
   }
@@ -300,9 +298,7 @@ export class SerperDiscoveryProvider
     const startedAt = Date.now();
 
     const apiKey =
-      Deno.env.get(
-        "SERPER_API_KEY"
-      );
+      Deno.env.get("SERPER_API_KEY");
 
     if (!apiKey) {
       throw new Error(
@@ -310,11 +306,30 @@ export class SerperDiscoveryProvider
       );
     }
 
+    const estimatedCostPerQuery =
+      Number(
+        Deno.env.get(
+          "SERPER_ESTIMATED_COST"
+        ) ?? "0.001"
+      );
+
     if (
-      context.remainingBudget <= 0
+      !Number.isFinite(
+        estimatedCostPerQuery
+      ) ||
+      estimatedCostPerQuery <= 0
     ) {
       throw new Error(
-        "Provider budget exhausted"
+        "SERPER_ESTIMATED_COST must be a positive number"
+      );
+    }
+
+    if (
+      context.remainingBudget <
+      estimatedCostPerQuery
+    ) {
+      throw new Error(
+        "Provider budget is too low for a Serper query"
       );
     }
 
@@ -341,29 +356,35 @@ export class SerperDiscoveryProvider
         CompanyCandidate
       >();
 
-    const pagesToFetch =
-      Math.min(
-        Math.max(
-          Math.ceil(input.limit / 5),
-          1
-        ),
-        3
+    const pagesToFetch = Math.min(
+      Math.max(
+        Math.ceil(input.limit / 5),
+        1
+      ),
+      3
+    );
+
+    const maxAffordableQueries =
+      Math.floor(
+        context.remainingBudget /
+          estimatedCostPerQuery
       );
+
+    const queriesToFetch = Math.min(
+      pagesToFetch,
+      Math.max(
+        maxAffordableQueries,
+        1
+      )
+    );
 
     let successfulQueries = 0;
 
     for (
       let page = 1;
-      page <= pagesToFetch;
+      page <= queriesToFetch;
       page++
     ) {
-      if (
-        context.remainingBudget <=
-        successfulQueries
-      ) {
-        break;
-      }
-
       const response = await fetch(
         "https://google.serper.dev/search",
         {
@@ -512,11 +533,8 @@ export class SerperDiscoveryProvider
         startedAt,
 
       estimatedCost:
-        successfulQueries * Number(
-          Deno.env.get(
-            "SERPER_ESTIMATED_COST"
-          ) ?? "0.001"
-        ),
+        successfulQueries *
+        estimatedCostPerQuery,
     };
   }
 }
