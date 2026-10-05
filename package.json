@@ -1,0 +1,10 @@
+﻿{
+  "name": "desiretech-prospect-intelligence-os",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "deno test tests/",
+    "check": "deno check supabase/functions/prospect-discover/index.ts"
+  }
+}
