@@ -5,7 +5,7 @@
   ProviderResult,
 } from "./types.ts";
 import { ProviderRegistry } from "./registry.ts";
-import { companyEntityKey } from "../normalization/company.ts";
+import { resolveCompanyCandidates } from "./entity-resolution.ts";
 
 export interface WaterfallPolicy {
   minResults: number;
@@ -39,10 +39,7 @@ export class ProviderWaterfall {
     policy: WaterfallPolicy,
     requestId: string
   ): Promise<WaterfallResult> {
-    const candidates = new Map<
-      string,
-      CompanyCandidate
-    >();
+    const collectedCandidates: CompanyCandidate[] = [];
 
     const providersUsed: string[] = [];
     const providerErrors: ProviderErrorResult[] = [];
@@ -51,7 +48,8 @@ export class ProviderWaterfall {
     let totalCost = 0;
     let totalLatencyMs = 0;
 
-    const providers = this.registry.list();
+    const providers =
+      this.registry.list();
 
     for (const provider of providers) {
       if (
@@ -64,7 +62,8 @@ export class ProviderWaterfall {
 
       if (
         policy.maxCost !== undefined &&
-        totalCost >= policy.maxCost
+        totalCost >=
+          policy.maxCost
       ) {
         break;
       }
@@ -72,12 +71,15 @@ export class ProviderWaterfall {
       const remainingBudget =
         policy.maxCost !== undefined
           ? Math.max(
-              policy.maxCost - totalCost,
+              policy.maxCost -
+                totalCost,
               0
             )
           : Number.POSITIVE_INFINITY;
 
-      if (remainingBudget <= 0) {
+      if (
+        remainingBudget <= 0
+      ) {
         break;
       }
 
@@ -93,8 +95,13 @@ export class ProviderWaterfall {
             context
           );
 
-        providersUsed.push(provider.id);
-        providerResults.push(result);
+        providersUsed.push(
+          provider.id
+        );
+
+        providerResults.push(
+          result
+        );
 
         totalCost +=
           result.estimatedCost;
@@ -102,7 +109,10 @@ export class ProviderWaterfall {
         totalLatencyMs +=
           result.latencyMs;
 
-        for (const candidate of result.candidates) {
+        for (
+          const candidate of
+            result.candidates
+        ) {
           if (
             policy.minConfidence !==
               undefined &&
@@ -112,28 +122,18 @@ export class ProviderWaterfall {
             continue;
           }
 
-          const key =
-            companyEntityKey(
-              candidate
-            );
-
-          const existing =
-            candidates.get(key);
-
-          if (
-            !existing ||
-            candidate.confidence >
-              existing.confidence
-          ) {
-            candidates.set(
-              key,
-              candidate
-            );
-          }
+          collectedCandidates.push(
+            candidate
+          );
         }
 
+        const resolved =
+          resolveCompanyCandidates(
+            collectedCandidates
+          );
+
         if (
-          candidates.size >=
+          resolved.length >=
           policy.minResults
         ) {
           break;
@@ -145,22 +145,34 @@ export class ProviderWaterfall {
             : "Unknown provider error";
 
         providerErrors.push({
-          providerId: provider.id,
+          providerId:
+            provider.id,
           message,
           retryable: true,
         });
       }
     }
 
+    const resolvedCandidates =
+      resolveCompanyCandidates(
+        collectedCandidates
+      );
+
     return {
-      candidates: [
-        ...candidates.values(),
-      ].slice(0, input.limit),
+      candidates:
+        resolvedCandidates.slice(
+          0,
+          input.limit
+        ),
 
       providersUsed,
+
       providerErrors,
+
       totalCost,
+
       totalLatencyMs,
+
       providerResults,
     };
   }
